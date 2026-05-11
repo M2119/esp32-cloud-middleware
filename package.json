@@ -1,0 +1,17 @@
+{
+  "name": "nha-kho-iot-cloud",
+  "version": "2.0.0",
+  "description": "Hệ thống Backend IoT quản lý kho hàng trên Render",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.22.1",
+    "google-auth-library": "^9.10.0",
+    "google-spreadsheet": "^4.1.1",
+    "mqtt": "^5.7.0",
+    "ws": "^8.20.0"
+  }
+}

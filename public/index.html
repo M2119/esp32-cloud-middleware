@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard Giám Sát Nhà Kho IoT</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100 font-sans leading-normal tracking-normal min-h-screen">
+  
+  <nav class="bg-slate-800 p-4 shadow-lg">
+    <div class="container mx-auto flex justify-between items-center text-white">
+      <h1 class="text-xl font-bold">🏢 Giám Sát Nhà Kho IoT (Cloud Backend)</h1>
+      <span id="conn-badge" class="bg-red-500 text-xs font-semibold px-3 py-1 rounded-full shadow">MQTT: Disconnected</span>
+    </div>
+  </nav>
+
+  <div class="container mx-auto p-6">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+      <div class="bg-white rounded-xl p-6 shadow-sm border-l-4 border-red-500">
+        <h2 class="text-xs font-bold text-gray-400 uppercase tracking-wider">Nhiệt độ hiện tại</h2>
+        <p class="text-3xl font-extrabold text-red-600 mt-2"><span id="lbl-temp">--</span> °C</p>
+      </div>
+      <div class="bg-white rounded-xl p-6 shadow-sm border-l-4 border-blue-500">
+        <h2 class="text-xs font-bold text-gray-400 uppercase tracking-wider">Độ ẩm hiện tại</h2>
+        <p class="text-3xl font-extrabold text-blue-600 mt-2"><span id="lbl-hum">--</span> %</p>
+      </div>
+      <div class="bg-white rounded-xl p-6 shadow-sm border-l-4 border-emerald-500">
+        <h2 class="text-xs font-bold text-gray-400 uppercase tracking-wider">Cập nhật gần nhất</h2>
+        <p class="text-lg font-bold text-gray-700 mt-3" id="lbl-time">--:--:--</p>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="bg-white rounded-xl p-6 shadow-sm lg:col-span-2">
+        <h3 class="font-bold text-gray-800 mb-4 text-sm uppercase tracking-wide">📈 Biểu đồ biến thiên thời gian thực</h3>
+        <canvas id="myChart" height="150"></canvas>
+      </div>
+      
+      <div class="bg-white rounded-xl p-6 shadow-sm flex flex-col justify-between">
+        <div>
+          <h3 class="font-bold text-gray-800 mb-2 text-sm uppercase tracking-wide">🛠️ Điều khiển OTA & Reset</h3>
+          <p class="text-xs text-gray-500 mb-6">Phát lệnh từ xa xuống ESP32 qua topic <code class="bg-gray-100 text-red-600 px-1 rounded font-mono">nhakho/cmd</code>.</p>
+          
+          <button onclick="sendCommand('UPDATE_FIRMWARE')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg mb-2 transition shadow-sm flex items-center justify-center">
+            <span>🚀 Kích hoạt nạp code (OTA)</span>
+          </button>
+          <p class="text-[11px] text-gray-400 mb-6 italic text-center">Tải tự động từ: public/ota/firmware.bin</p>
+
+          <button onclick="sendCommand('RESET_WIFI')" class="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 px-4 rounded-lg transition shadow-sm flex items-center justify-center">
+            <span>⚠️ Khôi phục cài đặt gốc</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const ctx = document.getElementById('myChart').getContext('2d');
+    const myChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Nhiệt độ (°C)', borderColor: '#dc2626', backgroundColor: 'rgba(220, 38, 38, 0.1)', data: [], tension: 0.3, fill: true },
+          { label: 'Độ ẩm (%)', borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.1)', data: [], tension: 0.3, fill: true }
+        ]
+      },
+      options: { responsive: true }
+    });
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}`);
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      
+      if (data.type === 'mqtt_status') {
+        const badge = document.getElementById('conn-badge');
+        if (data.connected) {
+          badge.className = 'bg-emerald-500 text-xs font-semibold px-3 py-1 rounded-full shadow text-white';
+          badge.innerText = 'MQTT: Connected';
+        }
+      }
+      
+      if (data.type === 'telemetry') {
+        document.getElementById('lbl-temp').innerText = parseFloat(data.temp).toFixed(1);
+        document.getElementById('lbl-hum').innerText = parseFloat(data.hum).toFixed(1);
+        
+        const timeOnly = data.time.split(' ')[1] || data.time;
+        document.getElementById('lbl-time').innerText = timeOnly + (data.isRecovery ? " (Bản ghi cũ)" : "");
+
+        if (!data.isRecovery) {
+          myChart.data.labels.push(timeOnly);
+          myChart.data.datasets[0].data.push(data.temp);
+          myChart.data.datasets[1].data.push(data.hum);
+
+          if (myChart.data.labels.length > 15) {
+            myChart.data.labels.shift();
+            myChart.data.datasets[0].data.shift();
+            myChart.data.datasets[1].data.shift();
+          }
+          myChart.update();
+        }
+      }
+    };
+
+    function sendCommand(cmd) {
+      if (cmd === 'RESET_WIFI' && !confirm('⚠️ Nguy hiểm: Sẽ xóa toàn bộ WiFi đã lưu trên ESP32. Tiếp tục?')) return;
+      
+      fetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cmd })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) alert('✅ Đã phát lệnh thành công!');
+      })
+      .catch(err => alert('❌ Lỗi mất kết nối đến Server'));
+    }
+  </script>
+</body>
+</html>
