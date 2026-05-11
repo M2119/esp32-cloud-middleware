@@ -13,6 +13,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 app.use(express.json());
+// Lưu ý: File OTA phải nằm trong thư mục: public/ota/firmware.bin
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
@@ -40,6 +41,7 @@ async function initSheets() {
     await doc.loadInfo(); 
     sheet = doc.sheetsByIndex[0];
     console.log(`✅ [DATABASE] Đã kết nối Sheets: "${doc.title}"`);
+    console.log(`📌 Lưu ý: Đảm bảo ô A1=Timestamp, B1=Temperature, C1=Humidity`);
   } catch (error) {
     console.error("❌ [DATABASE] Lỗi kết nối Sheets:", error);
   }
@@ -47,10 +49,10 @@ async function initSheets() {
 initSheets();
 
 // ==========================================
-//    2. KẾT NỐI WEBSOCKET
+//    2. KẾT NỐI WEBSOCKET (Dành cho Dashboard)
 // ==========================================
 wss.on('connection', (ws) => {
-  console.log('🔗 [WS] Trình duyệt web vừa kết nối xem Dashboard');
+  console.log('🔗 [WS] Trình duyệt web vừa kết nối');
   ws.send(JSON.stringify({ type: 'status', message: 'Connected to Render Backend' }));
 });
 
@@ -63,7 +65,7 @@ function broadcastWS(data) {
 }
 
 // ==========================================
-//    3. KẾT NỐI HIVEMQ CLOUD
+//    3. KẾT NỐI HIVEMQ CLOUD & XỬ LÝ DỮ LIỆU
 // ==========================================
 const mqttUrl = `mqtts://${process.env.HIVEMQ_HOST}:8883`;
 const mqttClient = mqtt.connect(mqttUrl, {
@@ -89,16 +91,21 @@ mqttClient.on('message', async (topic, payload) => {
     console.log(`📩 [MQTT] Nhận từ (${topic}): ${msgStr}`);
     const data = JSON.parse(msgStr);
 
-    let timestamp = Date.now();
+    let timestamp = Date.now(); // Mặc định lấy giờ Server (mili-giây)
     let isRecovery = false;
 
+    // XỬ LÝ PHỤC HỒI DỮ LIỆU "HỐ ĐEN"
     if (topic === 'nhakho/recovery') {
       isRecovery = true;
-      if (data.timestamp) timestamp = Number(data.timestamp);
+      // QUAN TRỌNG: Đổi từ giây (ESP32) sang mili-giây (JS) để tránh lỗi năm 1970
+      if (data.timestamp) {
+        timestamp = Number(data.timestamp) * 1000;
+      }
     }
 
     const timeStr = new Date(timestamp).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
 
+    // Ghi vào Google Sheets
     if (sheet && data.temp != null && data.hum != null) {
       sheet.addRow({
         Timestamp: timeStr + (isRecovery ? ' [RECOVERY]' : ''),
@@ -106,9 +113,12 @@ mqttClient.on('message', async (topic, payload) => {
         Humidity: data.hum
       }).then(() => {
         console.log(`📝 [SHEETS] Đã lưu -> T: ${data.temp}°C | H: ${data.hum}%`);
-      }).catch(err => console.error('❌ [SHEETS] Lỗi ghi dòng:', err));
+      }).catch(err => {
+        console.error('❌ [SHEETS] Lỗi ghi dòng. Hãy kiểm tra tên cột A1, B1, C1!');
+      });
     }
 
+    // Cập nhật lên giao diện Web realtime
     broadcastWS({
       type: 'telemetry',
       temp: data.temp,
@@ -118,12 +128,12 @@ mqttClient.on('message', async (topic, payload) => {
     });
 
   } catch (err) {
-    console.error('❌ [MQTT] Lỗi parse dữ liệu:', err);
+    console.error('❌ [MQTT] Lỗi xử lý gói tin:', err);
   }
 });
 
 // ==========================================
-//    4. API XỬ LÝ LỆNH ĐIỀU KHIỂN & OTA
+//    4. API ĐIỀU KHIỂN TỪ XA (OTA & RESET)
 // ==========================================
 app.post('/api/command', (req, res) => {
   const { cmd } = req.body;
@@ -134,22 +144,23 @@ app.post('/api/command', (req, res) => {
   if (cmd === 'UPDATE_FIRMWARE') {
     const host = req.get('host');
     const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+    // Link tải firmware tự động dựa trên tên miền Render của bạn
     const otaUrl = `${protocol}://${host}/ota/firmware.bin`;
     
     payload = { cmd: 'UPDATE_FIRMWARE', url: otaUrl };
-    console.log(`⚙️ [CMD] Phát lệnh OTA. Link tải: ${otaUrl}`);
+    console.log(`⚙️ [CMD] Phát lệnh OTA. Link: ${otaUrl}`);
   } else if (cmd === 'RESET_WIFI') {
     payload = { cmd: 'RESET_WIFI' };
-    console.log("⚙️ [CMD] Phát lệnh khôi phục cài đặt gốc ESP32");
+    console.log("⚙️ [CMD] Phát lệnh xóa cấu hình WiFi trên ESP32");
   }
 
   mqttClient.publish('nhakho/cmd', JSON.stringify(payload), (err) => {
     if (err) return res.status(500).json({ error: 'Lỗi gửi MQTT' });
-    res.json({ success: true, payload });
+    res.json({ success: true, message: 'Đã phát lệnh thành công', payload });
   });
 });
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`🏢 [SERVER] Hệ thống đang vận hành tại cổng ${PORT}`);
+  console.log(`🏢 [SERVER] Hệ thống vận hành tại cổng ${PORT}`);
 });
