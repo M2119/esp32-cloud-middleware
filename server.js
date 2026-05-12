@@ -20,7 +20,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 //    0. CẤU HÌNH THÔNG BÁO FB MESSENGER
 // ==========================================
 const FB_API_KEY = process.env.FB_API_KEY || "xxxxx"; // Đặt API Key Messenger của bạn vào file .env hoặc thay thế trực tiếp ở đây
-const TEMP_ALARM_THRESHOLD = 20.0; // Ngưỡng nhiệt độ kích hoạt cảnh báo
+const TEMP_ALARM_THRESHOLD = 40.0; // Ngưỡng nhiệt độ kích hoạt cảnh báo
 let lastAlertTime = 0; // Biến lưu vết thời gian cảnh báo cuối cùng để tránh spam (Cooldown)
 
 // Hàm gửi tin nhắn cảnh báo tự động qua Facebook Messenger
