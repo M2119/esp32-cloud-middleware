@@ -17,6 +17,46 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
+//    0. CẤU HÌNH THÔNG BÁO FB MESSENGER
+// ==========================================
+const FB_API_KEY = process.env.FB_API_KEY || "xxxxx"; // Đặt API Key Messenger của bạn vào file .env hoặc thay thế trực tiếp ở đây
+const TEMP_ALARM_THRESHOLD = 35.0; // Ngưỡng nhiệt độ kích hoạt cảnh báo
+let lastAlertTime = 0; // Biến lưu vết thời gian cảnh báo cuối cùng để tránh spam (Cooldown)
+
+// Hàm gửi tin nhắn cảnh báo tự động qua Facebook Messenger
+async function sendMessengerAlert(temp, hum, timeStr) {
+  if (!FB_API_KEY || FB_API_KEY === "xxxxx") {
+    console.warn("⚠️ Chưa cấu hình FB_API_KEY. Bỏ qua tác vụ gửi thông báo Facebook Messenger.");
+    return;
+  }
+  
+  // Cơ chế Cooldown: Giới hạn chỉ gửi tin nhắn tối đa 15 phút (900.000 ms) một lần để tránh làm trôi tin nhắn
+  if (Date.now() - lastAlertTime < 900000) {
+    console.log("⏳ Nhiệt độ kho vẫn ở mức cao, nhưng đang trong khoảng thời gian chờ (cooldown) của thông báo Messenger.");
+    return;
+  }
+
+  // Nội dung thông báo gửi đi
+  const message = `🚨 CẢNH BÁO NHÀ KHO 🚨\nNhiệt độ vượt ngưỡng an toàn!\n🌡️ Nhiệt độ: ${temp}°C\n💧 Độ ẩm: ${hum}%\n⏰ Thời gian: ${timeStr}`;
+  
+  // Đường dẫn gọi API CallMeBot hỗ trợ Facebook Messenger
+  const url = `https://api.callmebot.com/facebook/send.php?apikey=${FB_API_KEY}&text=${encodeURIComponent(message)}`;
+
+  try {
+    const response = await fetch(url);
+    if (response.ok) {
+      console.log("💬 [MESSENGER] Đã gửi tin nhắn cảnh báo quá nhiệt thành công qua Facebook Messenger!");
+      lastAlertTime = Date.now();
+    } else {
+      const errText = await response.text();
+      console.error("❌ [MESSENGER] Lỗi phản hồi từ dịch vụ CallMeBot:", errText);
+    }
+  } catch (error) {
+    console.error("❌ [MESSENGER] Lỗi kết nối đường truyền khi gửi tin nhắn:", error);
+  }
+}
+
+// ==========================================
 //    1. KẾT NỐI GOOGLE SHEETS
 // ==========================================
 let doc;
@@ -97,7 +137,7 @@ mqttClient.on('message', async (topic, payload) => {
     // XỬ LÝ PHỤC HỒI DỮ LIỆU "HỐ ĐEN"
     if (topic === 'nhakho/recovery') {
       isRecovery = true;
-      // QUAN TRỌNG: Đổi từ giây (ESP32) sang mili-giây (JS) để tránh lỗi năm 1970
+      // QUAN TRỌNG: Đổi từ giây (ESP32) sang mili-giây (JS) để tránh lỗi hiển thị năm 1970
       if (data.timestamp) {
         timestamp = Number(data.timestamp) * 1000;
       }
@@ -114,8 +154,13 @@ mqttClient.on('message', async (topic, payload) => {
       }).then(() => {
         console.log(`📝 [SHEETS] Đã lưu -> T: ${data.temp}°C | H: ${data.hum}%`);
       }).catch(err => {
-        console.error('❌ [SHEETS] Lỗi ghi dòng. Hãy kiểm tra tên cột A1, B1, C1!');
+        console.error('❌ [SHEETS] Lỗi ghi dòng. Hãy kiểm tra tên cột A1, B1, C1!', err);
       });
+    }
+
+    // KIỂM TRA BÁO ĐỘNG FACEBOOK MESSENGER (Chỉ áp dụng khi dữ liệu là Live thời gian thực)
+    if (!isRecovery && data.temp != null && data.temp > TEMP_ALARM_THRESHOLD) {
+      sendMessengerAlert(data.temp, data.hum, timeStr);
     }
 
     // Cập nhật lên giao diện Web realtime
