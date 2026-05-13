@@ -155,16 +155,14 @@ app.post('/api/command', (req, res) => {
   let payload = {};
   
   if (cmd === 'UPDATE_FIRMWARE') {
-    const port = process.env.PORT || 3001;
-    // Tự động lấy IP máy tính để ESP32 có thể kết nối trong mạng LAN
-    const localIp = getLocalIp(); 
-    const protocol = req.protocol === 'https' ? 'https' : 'http';
+    // Ưu tiên lấy tên miền từ Render, nếu không có mới dùng host hiện tại
+    const host = process.env.RENDER_EXTERNAL_HOSTNAME || req.get('host');
+    const protocol = 'https'; // Render luôn dùng https cho link công khai
     
-    // Tạo link OTA chuẩn (Ví dụ: http://192.168.1.15:3001/ota/firmware.bin)
-    const otaUrl = `${protocol}://${localIp}:${port}/ota/firmware.bin`;
+    const otaUrl = `${protocol}://${host}/ota/firmware.bin`;
     
     payload = { cmd: 'UPDATE_FIRMWARE', url: otaUrl };
-    console.log(`⚙️ [CMD] Lệnh OTA: ${otaUrl}`);
+    console.log(`⚙️ [CMD] Phát lệnh OTA. Link: ${otaUrl}`);
   } else if (cmd === 'RESET_WIFI') {
     payload = { cmd: 'RESET_WIFI' };
   }
