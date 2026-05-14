@@ -31,8 +31,7 @@ const mqttOptions = {
     password: process.env.HIVEMQ_PASSWORD,
 };
 
-// --- CẤU HÌNH MULTER (SỬ DỤNG BỘ NHỚ ĐỂ ĐẨY LÊN GITHUB) ---
-// Vì Render xóa file local khi restart, ta không dùng diskStorage nữa
+// Cấu hình Multer sử dụng bộ nhớ RAM để đẩy thẳng OTA lên GitHub
 const upload = multer({ storage: multer.memoryStorage() });
 
 // --- KẾT NỐI GOOGLE SHEETS ---
@@ -42,6 +41,9 @@ const serviceAccountAuth = new JWT({
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 const doc = new GoogleSpreadsheet(SPREADSHEET_ID, serviceAccountAuth);
+
+// Bộ đệm ghi nhớ dữ liệu gần nhất để lọc trùng lặp
+let lastReceivedData = { temp: null, hum: null, time: 0 };
 
 // --- KẾT NỐI MQTT ---
 const client = mqtt.connect(mqttOptions);
@@ -55,44 +57,77 @@ client.on('connect', () => {
 client.on('message', async (topic, message) => {
     try {
         const data = JSON.parse(message.toString());
+        const nowMs = Date.now();
         const timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
         const suffix = (topic === 'nhakho/recovery') ? ' [Recovery]' : '';
         
+        // Phát dữ liệu Realtime lên giao diện Web
         io.emit('mqttData', { ...data, time: timestamp.split(' ')[0] });
 
+        // --- BỘ LỌC TRÙNG LẶP DỮ LIỆU ---
+        // Bỏ qua nếu bản tin Telemetry giống hệt bản tin trước đó trong vòng 45 giây
+        if (topic === 'nhakho/telemetry') {
+            if (lastReceivedData.temp === data.temp && 
+                lastReceivedData.hum === data.hum && 
+                (nowMs - lastReceivedData.time < 45000)) {
+                return; // Bỏ qua, không ghi vào Sheet Data
+            }
+            lastReceivedData = { temp: data.temp, hum: data.hum, time: nowMs };
+        }
+
+        // Ghi dữ liệu sạch vào Sheet Data
         await doc.loadInfo();
         const sheet = doc.sheetsByTitle['Data'];
         await sheet.addRow({
             Timestamp: `${timestamp}${suffix}`,
-            Temperature: data.temp.toFixed(1).replace('.', ','),
-            Humidity: data.hum.toFixed(1).replace('.', ',')
+            Temperature: parseFloat(data.temp).toFixed(1).replace('.', ','),
+            Humidity: parseFloat(data.hum).toFixed(1).replace('.', ',')
         });
     } catch (err) {
         console.error('Lỗi xử lý bản ghi MQTT:', err);
     }
 });
 
-// --- NODE-CRON: TỰ ĐỘNG TÍNH TOÁN TRUNG BÌNH (MỖI 30 PHÚT) ---
-cron.schedule('*/30 * * * *', async () => {
-    console.log('Đang chạy tác vụ tính toán trung bình ngầm...');
+// --- NODE-CRON: TỰ ĐỘNG TÍNH TOÁN TRUNG BÌNH (MỖI 5 PHÚT ĐỂ TEST) ---
+cron.schedule('*/5 * * * *', async () => {
+    console.log('Đang chạy tác vụ tính Summary (Chu kỳ 5 phút)...');
     try {
         await doc.loadInfo();
         const dataSheet = doc.sheetsByTitle['Data'];
         const summarySheet = doc.sheetsByTitle['Summary'];
+        
+        if (!summarySheet) {
+            console.error('Lỗi: Không tìm thấy Sheet mang tên "Summary".');
+            return;
+        }
+        
         const rows = await dataSheet.getRows();
 
         const calculateAvg = (minutes) => {
             const now = new Date();
             const filtered = rows.filter(r => {
                 const timestampField = r.get('Timestamp');
-                if (!timestampField) return false;
+                const tempField = r.get('Temperature');
+                const humField = r.get('Humidity');
                 
-                const timeStr = timestampField.split(' [')[0]; 
-                const [time, date] = timeStr.split(' ');
-                const [d, m, y] = date.split('/');
-                const dateObj = new Date(`${y}-${m}-${d}T${time}`);
+                // BỘ LỌC VALIDATION: Loại bỏ hoàn toàn các dòng trống hoặc dữ liệu rác
+                if (!timestampField || !tempField || !humField) return false;
                 
-                return (now - dateObj) <= (minutes * 60000);
+                // Đảm bảo thông số chuyển đổi được sang số hợp lệ
+                const tVal = parseFloat(tempField.replace(',', '.'));
+                const hVal = parseFloat(humField.replace(',', '.'));
+                if (isNaN(tVal) || isNaN(hVal)) return false;
+
+                // Lọc theo mốc thời gian
+                try {
+                    const timeStr = timestampField.split(' [')[0]; 
+                    const [time, date] = timeStr.split(' ');
+                    const [d, m, y] = date.split('/');
+                    const dateObj = new Date(`${y}-${m}-${d}T${time}`);
+                    return (now - dateObj) <= (minutes * 60000);
+                } catch (e) {
+                    return false;
+                }
             });
 
             if (filtered.length === 0) return null;
@@ -127,18 +162,18 @@ cron.schedule('*/30 * * * *', async () => {
                 });
             }
         }
+        console.log('Ghi thành công dữ liệu vào Sheet Summary!');
     } catch (err) {
-        console.error('Lỗi tính toán Node-cron:', err);
+        console.error('Lỗi tính toán Node-cron Summary:', err);
     }
 });
 
 // --- API ROUTES ---
-
 app.use(express.static('public'));
 
-// XỬ LÝ UPLOAD OTA TỪ XA QUA GITHUB API
+// Xử lý upload OTA Remote qua GitHub API
 app.post('/upload-ota', upload.single('firmware'), async (req, res) => {
-    if (!req.file) return res.status(400).send('Không tìm thấy file firmware tải lên.');
+    if (!req.file) return res.status(400).send('Không tìm thấy file firmware.');
 
     const token = process.env.GITHUB_TOKEN;
     const owner = process.env.GITHUB_OWNER;
@@ -147,15 +182,14 @@ app.post('/upload-ota', upload.single('firmware'), async (req, res) => {
     const targetPath = 'public/ota/firmware.bin';
 
     if (!token || !owner || !repo) {
-        return res.status(500).send('Chưa cấu hình thông tin Token hoặc Repo GitHub trong file .env');
+        return res.status(500).send('Chưa cấu hình Token hoặc Repo GitHub trong .env');
     }
 
     const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${targetPath}`;
-    const fileBase64 = req.file.buffer.toString('base64'); // Chuyển đổi nhị phân sang Base64
+    const fileBase64 = req.file.buffer.toString('base64');
     let fileSha = null;
 
     try {
-        // Bước 1: Gọi API kiểm tra xem file firmware.bin đã tồn tại trên repo chưa để lấy SHA
         const getRes = await fetch(`${apiUrl}?ref=${branch}`, {
             headers: {
                 'Authorization': `token ${token}`,
@@ -166,16 +200,15 @@ app.post('/upload-ota', upload.single('firmware'), async (req, res) => {
 
         if (getRes.ok) {
             const fileData = await getRes.json();
-            fileSha = fileData.sha; // Lấy SHA nếu file cần được ghi đè
+            fileSha = fileData.sha; 
         }
 
-        // Bước 2: Commit và ghi đè file mới lên GitHub
         const putPayload = {
             message: `Cập nhật Firmware OTA từ xa lúc ${new Date().toLocaleTimeString('vi-VN')}`,
             content: fileBase64,
             branch: branch
         };
-        if (fileSha) putPayload.sha = fileSha; // Bắt buộc phải có SHA cũ nếu ghi đè
+        if (fileSha) putPayload.sha = fileSha; 
 
         const putRes = await fetch(apiUrl, {
             method: 'PUT',
@@ -188,18 +221,13 @@ app.post('/upload-ota', upload.single('firmware'), async (req, res) => {
             body: JSON.stringify(putPayload)
         });
 
-        if (!putRes.ok) {
-            const errorDetails = await putRes.text();
-            throw new Error(`GitHub API từ chối cập nhật: ${errorDetails}`);
-        }
+        if (!putRes.ok) throw new Error(await putRes.text());
 
-        // Bước 3: Phát lệnh nạp trực tiếp qua liên kết Raw siêu tốc của GitHub
         const rawOtaUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${targetPath}`;
         client.publish('nhakho/cmd', JSON.stringify({ cmd: "UPDATE_FIRMWARE", url: rawOtaUrl }));
 
         res.send('Tải file lên GitHub thành công! Đã phát lệnh cập nhật OTA tự động.');
     } catch (err) {
-        console.error('Lỗi quy trình OTA Remote:', err);
         res.status(500).send(`Lỗi đẩy file lên GitHub: ${err.message}`);
     }
 });
