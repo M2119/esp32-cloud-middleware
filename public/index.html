@@ -1,4 +1,4 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
@@ -10,81 +10,132 @@
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #eef2f3; margin: 0; padding: 20px; color: #333; }
         .main-wrapper { max-width: 950px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.08); }
         h1 { text-align: center; color: #2c3e50; margin-bottom: 20px; }
-        .chart-container { position: relative; width: 100%; height: 450px; margin-bottom: 20px; }
-        .ota-box { margin-top: 20px; padding: 20px; background: #f8fcfb; border: 2px dashed #b2bec3; border-radius: 8px; text-align: center; }
-        .ota-box h3 { margin-top: 0; color: #00b894; }
-        input[type="file"] { margin: 15px 0; }
-        button { background-color: #0984e3; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 15px; transition: 0.2s; }
-        button:hover { background-color: #74b9ff; }
-        button:disabled { background-color: #b2bec3; cursor: not-allowed; }
-        #statusText { margin-top: 15px; font-weight: bold; color: #0984e3; }
-        .spinner { display: inline-block; width: 16px; height: 16px; border: 3px solid rgba(0,0,0,.1); border-radius: 50%; border-top-color: #0984e3; animation: spin 1s ease-in-out infinite; margin-right: 5px; vertical-align: middle; }
+        
+        /* Layout Thẻ Hiển Thị Số Liệu */
+        .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px; }
+        .card { padding: 20px; border-radius: 8px; text-align: center; color: #fff; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .card.temp { background: linear-gradient(135deg, #ff7675, #d63031); }
+        .card.hum { background: linear-gradient(135deg, #74b9ff, #0984e3); }
+        .card h3 { margin: 0 0 10px 0; text-transform: uppercase; letter-spacing: 1px; font-size: 16px; }
+        .card .value { font-size: 36px; margin: 0; }
+
+        .chart-container { position: relative; width: 100%; height: 350px; margin-bottom: 25px; }
+        
+        /* Grid cho hai khu vực điều khiển bên dưới */
+        .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }
+        
+        .panel-box { padding: 20px; background: #f8fcfb; border: 2px dashed #b2bec3; border-radius: 8px; box-shadow: inset 0 0 5px rgba(0,0,0,0.02); }
+        .panel-box h3 { margin-top: 0; color: #2c3e50; border-bottom: 2px solid #dfe6e9; padding-bottom: 8px; }
+        
+        /* Thành phần nút và trạng thái */
+        .btn { padding: 10px 20px; font-size: 14px; font-weight: bold; border: none; border-radius: 5px; cursor: pointer; transition: background 0.2s; color: white; width: 100%; box-sizing: border-box; }
+        .btn-upload { background-color: #00b894; }
+        .btn-upload:hover { background-color: #009432; }
+        .btn-reset { background-color: #e17055; margin-top: 15px; }
+        .btn-reset:hover { background-color: #ch3510; background-color: #d63031; }
+        .btn:disabled { background-color: #b2bec3; cursor: not-allowed; }
+        
+        .status-msg { margin-top: 12px; font-size: 13px; font-weight: 500; text-align: left; line-height: 1.4; min-height: 20px; }
+        
+        /* Loading animation hiệu ứng xoay tròn */
+        .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(0,0,0,0.1); border-left-color: currentColor; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; vertical-align: middle; }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
     <div class="main-wrapper">
-        <h1>HỆ THỐNG GIÁM SÁT NHÀ KHO</h1>
-        
-        <div class="chart-container">
-            <canvas id="telemetryChart"></canvas>
+        <h1>HỆ THỐNG GIÁM SÁT KHO HÀNG</h1>
+
+        <div class="cards-grid">
+            <div class="card temp">
+                <h3>Nhiệt Độ</h3>
+                <p class="value" id="currentTemp">-- °C</p>
+            </div>
+            <div class="card hum">
+                <h3>Độ Ẩm</h3>
+                <p class="value" id="currentHum">-- %</p>
+            </div>
         </div>
 
-        <div class="ota-box">
-            <h3>Cập Nhật Firmware Từ Xa (GitHub Cloud)</h3>
-            <p>Tệp tin <b>.bin</b> sẽ được mã hóa và đồng bộ thẳng lên Repository GitHub của bạn</p>
-            <input type="file" id="firmwareInput" accept=".bin">
-            <br>
-            <button id="uploadBtn" onclick="triggerRemoteOTA()">Đồng bộ lên GitHub & Nạp</button>
-            <div id="statusText"></div>
+        <div class="chart-container">
+            <canvas id="realtimeChart"></canvas>
+        </div>
+
+        <div class="control-grid">
+            
+            <div class="panel-box">
+                <h3>Mạch Nâng Cấp Từ Xa (OTA)</h3>
+                <p style="font-size: 13px; color: #636e72; margin-bottom: 15px;">Chọn file <code style="font-weight:bold;">.bin</code> vừa biên dịch để tự động nạp code từ xa qua Github API.</p>
+                <input type="file" id="firmwareInput" accept=".bin" style="margin-bottom: 12px; width: 100%;">
+                <button class="btn btn-upload" id="uploadBtn" onclick="triggerRemoteOTA()">Tiến Hành Cập Nhật Firmware</button>
+                <div class="status-msg" id="statusText">Sẵn sàng.</div>
+            </div>
+
+            <div class="panel-box" style="background-color: #fff5f5;">
+                <h3 style="color: #d63031;">Hệ Thống Tiện Ích</h3>
+                <p style="font-size: 13px; color: #636e72; margin-bottom: 15px;">Xóa sạch bộ nhớ WiFiManager lưu trên ESP32. Thiết bị sẽ tự động Restart và khởi tạo lại điểm phát sóng WiFi cấu hình ban đầu.</p>
+                <button class="btn btn-reset" id="resetWifiBtn" onclick="triggerRemoteResetWiFi()">Cấu Hình Lại WiFi (Reset WiFi)</button>
+                <div class="status-msg" id="resetStatusText" style="color: #636e72;">Sẵn sàng.</div>
+            </div>
+
         </div>
     </div>
 
     <script>
-        const ctx = document.getElementById('telemetryChart').getContext('2d');
-        const socket = io();
+        // --- 1. CẤU HÌNH BIỂU ĐỒ CHART.JS ---
+        const ctx = document.getElementById('realtimeChart').getContext('2d');
+        const MAX_POINTS = 15;
+        const chartData = {
+            labels: [],
+            datasets: [
+                { label: 'Nhiệt độ (°C)', data: [], borderColor: '#d63031', backgroundColor: 'rgba(214, 48, 49, 0.1)', tension: 0.3, yAxisID: 'y-temp' },
+                { label: 'Độ ẩm (%)', data: [], borderColor: '#0984e3', backgroundColor: 'rgba(9, 132, 227, 0.1)', tension: 0.3, yAxisID: 'y-hum' }
+            ]
+        };
 
-        const telemetryChart = new Chart(ctx, {
+        const config = {
             type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    { label: 'Nhiệt độ (°C)', data: [], borderColor: '#e17055', backgroundColor: 'rgba(225, 112, 85, 0.1)', fill: true, tension: 0.3, borderWidth: 2.5 },
-                    { label: 'Độ ẩm (%)', data: [], borderColor: '#0984e3', backgroundColor: 'rgba(9, 132, 227, 0.1)', fill: true, tension: 0.3, borderWidth: 2.5 }
-                ]
-            },
+            data: chartData,
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
                 scales: {
-                    x: { title: { display: true, text: 'Trục Thời Gian (Giờ:Phút:Giây)', font: { weight: 'bold' } } },
-                    y: { title: { display: true, text: 'Giá Trị Đo', font: { weight: 'bold' } } }
+                    'y-temp': { type: 'linear', position: 'left', title: { display: true, text: 'Nhiệt độ (°C)' } },
+                    'y-hum': { type: 'linear', position: 'right', title: { display: true, text: 'Độ ẩm (%)' }, grid: { drawOnChartArea: false } }
                 }
             }
-        });
+        };
+        const realtimeChart = new Chart(ctx, config);
 
-        // Chỉ xử lý dữ liệu realtime và cập nhật vào biểu đồ
+        // --- 2. KẾT NỐI WEBSOCKET NHẬN DỮ LIỆU REALTIME ---
+        const socket = io();
         socket.on('mqttData', (data) => {
-            // Giữ lại 25 điểm dữ liệu gần nhất trên biểu đồ để không bị tràn
-            if (telemetryChart.data.labels.length >= 25) {
-                telemetryChart.data.labels.shift();
-                telemetryChart.data.datasets[0].data.shift();
-                telemetryChart.data.datasets[1].data.shift();
+            // Cập nhật giá trị lên thẻ Card số liệu hiển thị lớn
+            if(data.temp) document.getElementById('currentTemp').innerText = parseFloat(data.temp).toFixed(1) + ' °C';
+            if(data.hum) document.getElementById('currentHum').innerText = parseFloat(data.hum).toFixed(1) + ' %';
+            
+            // Đẩy mốc thời gian và số liệu mới vào đồ thị biểu đồ
+            if (chartData.labels.length >= MAX_POINTS) {
+                chartData.labels.shift();
+                chartData.datasets[0].data.shift();
+                chartData.datasets[1].data.shift();
             }
-            telemetryChart.data.labels.push(data.time);
-            telemetryChart.data.datasets[0].data.push(data.temp.toFixed(1));
-            telemetryChart.data.datasets[1].data.push(data.hum.toFixed(1));
-            telemetryChart.update();
+            
+            chartData.labels.push(data.time || new Date().toLocaleTimeString('vi-VN'));
+            chartData.datasets[0].data.push(data.temp);
+            chartData.datasets[1].data.push(data.hum);
+            realtimeChart.update();
         });
 
+        // --- 3. HÀM GỬI YÊU CẦU NÂNG CẤP FIRMWARE OTA ---
         function triggerRemoteOTA() {
             const input = document.getElementById('firmwareInput');
             const status = document.getElementById('statusText');
             const btn = document.getElementById('uploadBtn');
 
             if (input.files.length === 0) {
-                alert('Vui lòng chọn tệp tin .bin trước!');
+                alert('Vui lòng chọn tệp tin định dạng .bin trước!');
                 return;
             }
 
@@ -93,12 +144,9 @@
 
             btn.disabled = true;
             status.style.color = '#0984e3';
-            status.innerHTML = '<span class="spinner"></span>Đang mã hóa và đẩy lên kho lưu trữ GitHub... (Vui lòng đợi vài giây)';
+            status.innerHTML = '<span class="spinner"></span>Đang mã hóa dữ liệu gửi lên GitHub...';
 
-            fetch('/upload-ota', {
-                method: 'POST',
-                body: payload
-            })
+            fetch('/upload-ota', { method: 'POST', body: payload })
             .then(async response => {
                 const msg = await response.text();
                 if (!response.ok) throw new Error(msg);
@@ -113,9 +161,43 @@
                 status.style.color = '#d63031';
                 status.innerText = 'Lỗi cập nhật: ' + error.message;
             })
-            .finally(() => {
-                btn.disabled = false;
-            });
+            .finally(() => { btn.disabled = false; });
+        }
+
+        // --- 4. HÀM KÍCH HOẠT LỆNH RESET WIFI TỪ XA ---
+        function triggerRemoteResetWiFi() {
+            const status = document.getElementById('resetStatusText');
+            const btn = document.getElementById('resetWifiBtn');
+
+            // Hộp thoại bảo vệ xác nhận an toàn tránh ấn nhầm ngoài ý muốn
+            const firstCheck = confirm("CẢNH BÁO: Hành động này sẽ xóa toàn bộ bộ nhớ mạng WiFi đang lưu trên ESP32!\nMạch sẽ khởi động lại và mất kết nối Cloud ngay lập tức.\n\nBạn có chắc chắn muốn thực hiện?");
+            if (!firstCheck) return;
+
+            const secondCheck = confirm("XÁC NHẬN LẦN CUỐI:\nBạn sẽ phải ra tận nơi lắp mạch, kết nối vào mạng AP 'ESP32_T-H-Realtimer' để cấu hình lại WiFi cho nó.\n\nBạn vẫn muốn tiếp tục?");
+            if (!secondCheck) return;
+
+            // Tiến hành kích hoạt luồng gọi API lên Backend Server
+            btn.disabled = true;
+            status.style.color = '#d63031';
+            status.innerHTML = '<span class="spinner"></span>Đang phát lệnh Reset WiFi qua Broker MQTT...';
+
+            fetch('/reset-wifi', { method: 'POST' })
+            .then(async response => {
+                const text = await response.text();
+                if (!response.ok) throw new Error(text);
+                return text;
+            })
+            .then(msg => {
+                status.style.color = '#2d3436';
+                status.style.fontWeight = 'bold';
+                status.innerText = '✓ Lệnh đã phát đi thành công! Thiết bị đang xóa bộ nhớ và khởi động lại...';
+                alert('Mạch đang thực hiện xóa cấu hình WiFi và Khởi động lại. Giao diện Web sẽ tạm ngưng nhận dữ liệu từ mạch này cho đến khi bạn cấu hình mạng mới.');
+            })
+            .catch(err => {
+                status.style.color = '#d63031';
+                status.innerText = 'Thất bại: ' + err.message;
+            })
+            .finally(() => { btn.disabled = false; });
         }
     </script>
 </body>

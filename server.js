@@ -57,23 +57,34 @@ client.on('message', async (topic, message) => {
     try {
         const data = JSON.parse(message.toString());
         const nowMs = Date.now();
-        const timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+        
+        // --- PHẦN XỬ LÝ THỜI GIAN ĐỒNG BỘ OFFLINE (ĐÃ SỬA LỖI TRÙNG GIỜ) ---
+        let timestamp;
+        if (topic === 'nhakho/recovery' && data.timestamp) {
+            // Chuyển đổi dấu thời gian Epoch (giây) của ESP32 sang Miligiây trong JS
+            timestamp = new Date(data.timestamp * 1000).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+        } else {
+            // Dữ liệu Realtime telemetry thì lấy giờ hiện tại của máy chủ Server
+            timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+        }
+
         const suffix = (topic === 'nhakho/recovery') ? ' [Recovery]' : '';
         
-        // Phát dữ liệu Realtime lên giao diện Web
+        // Gửi dữ liệu qua Socket.io cập nhật giao diện Dashboard Realtime
         io.emit('mqttData', { ...data, time: timestamp.split(' ')[0] });
 
         // --- BỘ LỌC TRÙNG LẶP DỮ LIỆU ---
+        // CHỈ lọc trùng cho dữ liệu realtime (telemetry), giữ nguyên dữ liệu lịch sử phục hồi (recovery)
         if (topic === 'nhakho/telemetry') {
             if (lastReceivedData.temp === data.temp && 
                 lastReceivedData.hum === data.hum && 
                 (nowMs - lastReceivedData.time < 45000)) {
-                return; // Bỏ qua, không ghi vào Sheet Data
+                return; 
             }
             lastReceivedData = { temp: data.temp, hum: data.hum, time: nowMs };
         }
 
-        // Ghi dữ liệu sạch vào Sheet Data
+        // Ghi dữ liệu vào Google Sheets
         await doc.loadInfo();
         const sheet = doc.sheetsByTitle['Data'];
         await sheet.addRow({
@@ -89,7 +100,21 @@ client.on('message', async (topic, message) => {
 // --- API ROUTES ---
 app.use(express.static('public'));
 
-// Xử lý upload OTA Remote qua GitHub API
+// 🛠️ API NHẬN LỆNH RESET WIFI TỪ GIAO DIỆN WEB
+app.post('/reset-wifi', (req, res) => {
+    try {
+        const payload = JSON.stringify({ cmd: "RESET_WIFI" });
+        // Xuất bản tin điều khiển xuống mạch qua topic 'nhakho/cmd'
+        client.publish('nhakho/cmd', payload);
+        console.log('--> Đã phát lệnh RESET_WIFI xuống thiết bị thành công');
+        res.send('Gửi lệnh yêu cầu xóa cấu hình WiFi và khởi động lại mạch thành công!');
+    } catch (err) {
+        console.error('Lỗi gửi lệnh reset:', err);
+        res.status(500).send(`Không thể gửi lệnh reset đến thiết bị: ${err.message}`);
+    }
+});
+
+// API xử lý upload OTA Remote qua GitHub API
 app.post('/upload-ota', upload.single('firmware'), async (req, res) => {
     if (!req.file) return res.status(400).send('Không tìm thấy file firmware.');
 
