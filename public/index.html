@@ -128,7 +128,7 @@
             realtimeChart.update();
         });
 
-        // --- 3. HÀM GỬI YÊU CẦU NÂNG CẤP FIRMWARE OTA ---
+// --- 3. HÀM GỬI YÊU CẦU NÂNG CẤP FIRMWARE OTA ---
         function triggerRemoteOTA() {
             const input = document.getElementById('firmwareInput');
             const status = document.getElementById('statusText');
@@ -143,7 +143,7 @@
             payload.append('firmware', input.files[0]);
 
             btn.disabled = true;
-            status.style.color = '#0984e3';
+            status.style.color = '#0984e3'; // Màu xanh dương báo đang làm việc
             status.innerHTML = '<span class="spinner"></span>Đang mã hóa dữ liệu gửi lên GitHub...';
 
             fetch('/upload-ota', { method: 'POST', body: payload })
@@ -153,16 +153,33 @@
                 return msg;
             })
             .then(successMsg => {
-                status.style.color = '#00b894';
-                status.innerText = successMsg;
+                // Đã đẩy file lên Github xong, giờ chờ mạch nạp (khoảng 30-60s)
+                status.innerHTML = '<span class="spinner"></span>' + successMsg + '<br><small style="color:#636e72;">Đang chờ mạch nạp tải và nạp code. Vui lòng không tắt trang... (Mất khoảng 30s)</small>';
                 input.value = '';
+                // Chú ý: Cố tình chưa mở khóa nút nhấn btn.disabled = false ở đây. Phải chờ mạch phản hồi!
             })
             .catch(error => {
                 status.style.color = '#d63031';
-                status.innerText = 'Lỗi cập nhật: ' + error.message;
-            })
-            .finally(() => { btn.disabled = false; });
+                status.innerText = 'Lỗi hệ thống: ' + error.message;
+                btn.disabled = false; // Mở lại nút nếu bị lỗi Github
+            });
         }
+
+        // --- 4. BẮT SỰ KIỆN MẠCH ESP32 PHẢN HỒI ĐÃ NẠP OTA XONG ---
+        socket.on('otaEvent', (res) => {
+            const status = document.getElementById('statusText');
+            const btn = document.getElementById('uploadBtn');
+            
+            if(res.success) {
+                status.style.color = '#00b894'; // Màu xanh lá báo thành công
+                status.style.fontWeight = 'bold';
+                status.innerText = res.message;
+            } else {
+                status.style.color = '#d63031'; // Màu đỏ báo lỗi
+                status.innerText = res.message;
+            }
+            btn.disabled = false; // Nạp xong rồi mới mở lại nút cho phép nhấn tiếp
+        });
 
         // --- 4. HÀM KÍCH HOẠT LỆNH RESET WIFI TỪ XA ---
         function triggerRemoteResetWiFi() {
