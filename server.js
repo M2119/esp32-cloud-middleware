@@ -4,7 +4,6 @@ const mqtt = require('mqtt');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const multer = require('multer');
-const cron = require('node-cron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -65,7 +64,6 @@ client.on('message', async (topic, message) => {
         io.emit('mqttData', { ...data, time: timestamp.split(' ')[0] });
 
         // --- BỘ LỌC TRÙNG LẶP DỮ LIỆU ---
-        // Bỏ qua nếu bản tin Telemetry giống hệt bản tin trước đó trong vòng 45 giây
         if (topic === 'nhakho/telemetry') {
             if (lastReceivedData.temp === data.temp && 
                 lastReceivedData.hum === data.hum && 
@@ -85,86 +83,6 @@ client.on('message', async (topic, message) => {
         });
     } catch (err) {
         console.error('Lỗi xử lý bản ghi MQTT:', err);
-    }
-});
-
-// --- NODE-CRON: TỰ ĐỘNG TÍNH TOÁN TRUNG BÌNH (MỖI 5 PHÚT ĐỂ TEST) ---
-cron.schedule('*/5 * * * *', async () => {
-    console.log('Đang chạy tác vụ tính Summary (Chu kỳ 5 phút)...');
-    try {
-        await doc.loadInfo();
-        const dataSheet = doc.sheetsByTitle['Data'];
-        const summarySheet = doc.sheetsByTitle['Summary'];
-        
-        if (!summarySheet) {
-            console.error('Lỗi: Không tìm thấy Sheet mang tên "Summary".');
-            return;
-        }
-        
-        const rows = await dataSheet.getRows();
-
-        const calculateAvg = (minutes) => {
-            const now = new Date();
-            const filtered = rows.filter(r => {
-                const timestampField = r.get('Timestamp');
-                const tempField = r.get('Temperature');
-                const humField = r.get('Humidity');
-                
-                // BỘ LỌC VALIDATION: Loại bỏ hoàn toàn các dòng trống hoặc dữ liệu rác
-                if (!timestampField || !tempField || !humField) return false;
-                
-                // Đảm bảo thông số chuyển đổi được sang số hợp lệ
-                const tVal = parseFloat(tempField.replace(',', '.'));
-                const hVal = parseFloat(humField.replace(',', '.'));
-                if (isNaN(tVal) || isNaN(hVal)) return false;
-
-                // Lọc theo mốc thời gian
-                try {
-                    const timeStr = timestampField.split(' [')[0]; 
-                    const [time, date] = timeStr.split(' ');
-                    const [d, m, y] = date.split('/');
-                    const dateObj = new Date(`${y}-${m}-${d}T${time}`);
-                    return (now - dateObj) <= (minutes * 60000);
-                } catch (e) {
-                    return false;
-                }
-            });
-
-            if (filtered.length === 0) return null;
-
-            const sumT = filtered.reduce((acc, r) => acc + parseFloat(r.get('Temperature').replace(',', '.')), 0);
-            const sumH = filtered.reduce((acc, r) => acc + parseFloat(r.get('Humidity').replace(',', '.')), 0);
-            
-            return {
-                avgT: (sumT / filtered.length).toFixed(1),
-                avgH: (sumH / filtered.length).toFixed(1),
-                points: filtered.length
-            };
-        };
-
-        const types = [
-            { name: '30p', min: 30 },
-            { name: '1Day', min: 1440 },
-            { name: '1Week', min: 10080 },
-            { name: '1Month', min: 43200 }
-        ];
-
-        const currentTime = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-        for (const t of types) {
-            const res = calculateAvg(t.min);
-            if (res) {
-                await summarySheet.addRow({
-                    Type: t.name,
-                    Timestamp: currentTime,
-                    AvgTemperature: res.avgT.replace('.', ','),
-                    AvgHumidity: res.avgH.replace('.', ','),
-                    DataPoints: res.points
-                });
-            }
-        }
-        console.log('Ghi thành công dữ liệu vào Sheet Summary!');
-    } catch (err) {
-        console.error('Lỗi tính toán Node-cron Summary:', err);
     }
 });
 
@@ -232,39 +150,4 @@ app.post('/upload-ota', upload.single('firmware'), async (req, res) => {
     }
 });
 
-// Lấy 100 dòng mới nhất
-app.get('/api/history-100', async (req, res) => {
-    try {
-        await doc.loadInfo();
-        const sheet = doc.sheetsByTitle['Data'];
-        const rows = await sheet.getRows({ offset: Math.max(0, sheet.rowCount - 101) });
-        const data = rows.map(r => ({
-            time: r.get('Timestamp').split(' ')[0],
-            temp: parseFloat(r.get('Temperature').replace(',', '.')),
-            hum: parseFloat(r.get('Humidity').replace(',', '.'))
-        }));
-        res.json(data);
-    } catch (err) {
-        res.status(500).send('Lỗi truy xuất dữ liệu 100 dòng.');
-    }
-});
-
-// Lấy thống kê Summary
-app.get('/api/summary/:type', async (req, res) => {
-    try {
-        await doc.loadInfo();
-        const sheet = doc.sheetsByTitle['Summary'];
-        const rows = await sheet.getRows();
-        const filtered = rows.filter(r => r.get('Type') === req.params.type).slice(-20);
-        const data = filtered.map(r => ({
-            time: r.get('Timestamp').split(' ')[0],
-            temp: parseFloat(r.get('AvgTemperature').replace(',', '.')),
-            hum: parseFloat(r.get('AvgHumidity').replace(',', '.'))
-        }));
-        res.json(data);
-    } catch (err) {
-        res.status(500).send('Lỗi truy xuất dữ liệu tổng hợp.');
-    }
-});
-
-server.listen(PORT, () => console.log(`Server Render đang chạy tại Port ${PORT}`));///
+server.listen(PORT, () => console.log(`Server Render đang chạy tại Port ${PORT}`));

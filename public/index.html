@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
@@ -10,10 +10,8 @@
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #eef2f3; margin: 0; padding: 20px; color: #333; }
         .main-wrapper { max-width: 950px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.08); }
         h1 { text-align: center; color: #2c3e50; margin-bottom: 20px; }
-        .control-panel { display: flex; justify-content: center; align-items: center; margin-bottom: 25px; gap: 10px; }
-        select { padding: 10px 15px; border: 1px solid #ccc; border-radius: 6px; font-size: 15px; background-color: #f8f9fa; cursor: pointer; outline: none; }
-        .chart-container { position: relative; width: 100%; height: 450px; }
-        .ota-box { margin-top: 40px; padding: 20px; background: #f8fcfb; border: 2px dashed #b2bec3; border-radius: 8px; text-align: center; }
+        .chart-container { position: relative; width: 100%; height: 450px; margin-bottom: 20px; }
+        .ota-box { margin-top: 20px; padding: 20px; background: #f8fcfb; border: 2px dashed #b2bec3; border-radius: 8px; text-align: center; }
         .ota-box h3 { margin-top: 0; color: #00b894; }
         input[type="file"] { margin: 15px 0; }
         button { background-color: #0984e3; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 15px; transition: 0.2s; }
@@ -29,18 +27,6 @@
     <div class="main-wrapper">
         <h1>HỆ THỐNG GIÁM SÁT NHÀ KHO</h1>
         
-        <div class="control-panel">
-            <label for="modeSelect"><strong>Chế độ hiển thị:</strong></label>
-            <select id="modeSelect" onchange="switchMode()">
-                <option value="realtime">Dữ liệu Realtime (Tức thời)</option>
-                <option value="history-100">100 Dòng mới nhất (Chi tiết phút)</option>
-                <option value="30p">Trung bình 30 Phút qua</option>
-                <option value="1Day">Trung bình 1 Ngày qua</option>
-                <option value="1Week">Trung bình 1 Tuần qua</option>
-                <option value="1Month">Trung bình 1 Tháng qua</option>
-            </select>
-        </div>
-
         <div class="chart-container">
             <canvas id="telemetryChart"></canvas>
         </div>
@@ -58,7 +44,6 @@
     <script>
         const ctx = document.getElementById('telemetryChart').getContext('2d');
         const socket = io();
-        let displayMode = 'realtime';
 
         const telemetryChart = new Chart(ctx, {
             type: 'line',
@@ -79,43 +64,19 @@
             }
         });
 
+        // Chỉ xử lý dữ liệu realtime và cập nhật vào biểu đồ
         socket.on('mqttData', (data) => {
-            if (displayMode === 'realtime') {
-                if (telemetryChart.data.labels.length >= 25) {
-                    telemetryChart.data.labels.shift();
-                    telemetryChart.data.datasets[0].data.shift();
-                    telemetryChart.data.datasets[1].data.shift();
-                }
-                telemetryChart.data.labels.push(data.time);
-                telemetryChart.data.datasets[0].data.push(data.temp.toFixed(1));
-                telemetryChart.data.datasets[1].data.push(data.hum.toFixed(1));
-                telemetryChart.update();
+            // Giữ lại 25 điểm dữ liệu gần nhất trên biểu đồ để không bị tràn
+            if (telemetryChart.data.labels.length >= 25) {
+                telemetryChart.data.labels.shift();
+                telemetryChart.data.datasets[0].data.shift();
+                telemetryChart.data.datasets[1].data.shift();
             }
+            telemetryChart.data.labels.push(data.time);
+            telemetryChart.data.datasets[0].data.push(data.temp.toFixed(1));
+            telemetryChart.data.datasets[1].data.push(data.hum.toFixed(1));
+            telemetryChart.update();
         });
-
-        async function switchMode() {
-            displayMode = document.getElementById('modeSelect').value;
-            if (displayMode === 'realtime') {
-                telemetryChart.data.labels = [];
-                telemetryChart.data.datasets[0].data = [];
-                telemetryChart.data.datasets[1].data = [];
-                telemetryChart.update();
-                return;
-            }
-
-            const targetEndpoint = displayMode === 'history-100' ? '/api/history-100' : `/api/summary/${displayMode}`;
-            try {
-                const response = await fetch(targetEndpoint);
-                const fetchedData = await response.json();
-
-                telemetryChart.data.labels = fetchedData.map(item => item.time);
-                telemetryChart.data.datasets[0].data = fetchedData.map(item => item.temp);
-                telemetryChart.data.datasets[1].data = fetchedData.map(item => item.hum);
-                telemetryChart.update();
-            } catch (err) {
-                alert('Không thể tải dữ liệu thống kê từ Server!');
-            }
-        }
 
         function triggerRemoteOTA() {
             const input = document.getElementById('firmwareInput');
