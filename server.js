@@ -23,7 +23,7 @@ const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
 // 🔔 CẤU HÌNH THÔNG BÁO FB MESSENGER (CallMeBot)
 // ==========================================
 const FB_API_KEY = process.env.FB_API_KEY || "xxxxx"; // Thêm biến FB_API_KEY vào file .env của bạn
-const TEMP_ALARM_THRESHOLD = 35.0; // Ngưỡng nhiệt độ kích hoạt cảnh báo (Đồng bộ với code mạch là 35)
+const TEMP_ALARM_THRESHOLD = 20.0; // Ngưỡng nhiệt độ kích hoạt cảnh báo (Đồng bộ với code mạch là 35)
 let lastAlertTime = 0; // Biến lưu vết thời gian cảnh báo cuối cùng để tránh spam (Cooldown)
 
 // Hàm gửi tin nhắn cảnh báo tự động qua Facebook Messenger
