@@ -22,34 +22,29 @@ const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
 // ==========================================
 // 🔔 CẤU HÌNH THÔNG BÁO FB MESSENGER (CallMeBot)
 // ==========================================
-const FB_API_KEY = process.env.FB_API_KEY || "xxxxx"; // Thêm biến FB_API_KEY vào file .env của bạn
-const TEMP_ALARM_THRESHOLD = 35.0; // Ngưỡng nhiệt độ kích hoạt cảnh báo (Đồng bộ với code mạch là 35)
-let lastAlertTime = 0; // Biến lưu vết thời gian cảnh báo cuối cùng để tránh spam (Cooldown)
+const FB_API_KEY = process.env.FB_API_KEY || "xxxxx"; 
+const TEMP_ALARM_THRESHOLD = 35.0; 
+let lastAlertTime = 0; 
 
-// Hàm gửi tin nhắn cảnh báo tự động qua Facebook Messenger
 async function sendMessengerAlert(temp, hum, timeStr) {
     if (!FB_API_KEY || FB_API_KEY === "xxxxx") {
         console.warn("⚠️ Chưa cấu hình FB_API_KEY trong file .env. Bỏ qua tác vụ gửi thông báo Facebook Messenger.");
         return;
     }
     
-    // Cơ chế Cooldown: Giới hạn chỉ gửi tin nhắn tối đa 15 phút (900.000 ms) một lần để tránh làm trôi tin nhắn
     if (Date.now() - lastAlertTime < 900000) {
         console.log("⏳ Nhiệt độ kho vẫn ở mức cao, nhưng đang trong thời gian chờ (cooldown 15 phút) của Messenger.");
         return;
     }
 
-    // Nội dung thông báo gửi đi
     const message = `🚨 CẢNH BÁO NHÀ KHO 🚨\nNhiệt độ vượt ngưỡng an toàn!\n🌡️ Nhiệt độ: ${temp}°C\n💧 Độ ẩm: ${hum}%\n⏰ Thời gian: ${timeStr}`;
-    
-    // Đường dẫn gọi API CallMeBot hỗ trợ Facebook Messenger
     const url = `https://api.callmebot.com/facebook/send.php?apikey=${FB_API_KEY}&text=${encodeURIComponent(message)}`;
 
     try {
         const response = await fetch(url);
         if (response.ok) {
             console.log("💬 [MESSENGER] Đã gửi tin nhắn cảnh báo quá nhiệt thành công qua FB Messenger!");
-            lastAlertTime = Date.now(); // Cập nhật lại mốc thời gian vừa gửi
+            lastAlertTime = Date.now(); 
         } else {
             const errText = await response.text();
             console.error("❌ [MESSENGER] Lỗi phản hồi từ dịch vụ CallMeBot:", errText);
@@ -90,7 +85,15 @@ client.on('message', async (topic, message) => {
     try {
         const data = JSON.parse(message.toString());
         
-        // --- XỬ LÝ PHẢN HỒI OTA TỪ MẠCH ---
+        // 🟢 1. XỬ LÝ PHẢN HỒI NHANH (ACK) TỪ LỆNH ĐIỀU KHIỂN CÒI
+        if (data.is_ack) {
+            console.log(`[ACK] Nhận phản hồi còi từ mạch ESP32: ${data.alarm_muted ? 'MUTE (Tắt)' : 'UNMUTE (Bật)'}`);
+            // Gửi thẳng trạng thái sang Giao diện Web để cập nhật nút bấm lập tức
+            io.emit('mqttData', { alarm_muted: data.alarm_muted });
+            return; // Thoát ngay để không bị dính vào bộ lọc Spam hay ghi lỗi vào Google Sheets
+        }
+
+        // --- 2. XỬ LÝ PHẢN HỒI OTA TỪ MẠCH ---
         if (data.status === 'OTA_SUCCESS') {
             io.emit('otaEvent', { success: true, message: '✓ Mạch đã nhận Code mới thành công và đang khởi động lại!' });
             return; 
@@ -99,7 +102,7 @@ client.on('message', async (topic, message) => {
             return;
         }
 
-        // --- XỬ LÝ DỮ LIỆU CẢM BIẾN ---
+        // --- 3. XỬ LÝ DỮ LIỆU CẢM BIẾN ---
         const nowMs = Date.now();
         let timestamp;
         let isRecovery = (topic === 'nhakho/recovery');
@@ -113,8 +116,7 @@ client.on('message', async (topic, message) => {
         const suffix = isRecovery ? ' [Recovery]' : '';
         io.emit('mqttData', { ...data, time: timestamp.split(' ')[0] });
 
-        // 🚨 GỌI HÀM CẢNH BÁO FACEBOOK MESSENGER TẠI ĐÂY 🚨
-        // Lưu ý: Chỉ gửi cảnh báo khi là dữ liệu Realtime (telemetry), không gửi với dữ liệu quá khứ (recovery)
+        // 🚨 GỌI HÀM CẢNH BÁO FACEBOOK MESSENGER
         if (!isRecovery && data.temp != null) {
             const currentTemp = parseFloat(data.temp);
             if (currentTemp >= TEMP_ALARM_THRESHOLD) {
