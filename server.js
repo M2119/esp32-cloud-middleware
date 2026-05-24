@@ -19,6 +19,47 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const serviceAccountPath = path.join(__dirname, 'service-account.json');
 const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
 
+// ==========================================
+// 🔔 CẤU HÌNH THÔNG BÁO FB MESSENGER (CallMeBot)
+// ==========================================
+const FB_API_KEY = process.env.FB_API_KEY || "xxxxx"; // Thêm biến FB_API_KEY vào file .env của bạn
+const TEMP_ALARM_THRESHOLD = 35.0; // Ngưỡng nhiệt độ kích hoạt cảnh báo (Đồng bộ với code mạch là 35)
+let lastAlertTime = 0; // Biến lưu vết thời gian cảnh báo cuối cùng để tránh spam (Cooldown)
+
+// Hàm gửi tin nhắn cảnh báo tự động qua Facebook Messenger
+async function sendMessengerAlert(temp, hum, timeStr) {
+    if (!FB_API_KEY || FB_API_KEY === "xxxxx") {
+        console.warn("⚠️ Chưa cấu hình FB_API_KEY trong file .env. Bỏ qua tác vụ gửi thông báo Facebook Messenger.");
+        return;
+    }
+    
+    // Cơ chế Cooldown: Giới hạn chỉ gửi tin nhắn tối đa 15 phút (900.000 ms) một lần để tránh làm trôi tin nhắn
+    if (Date.now() - lastAlertTime < 900000) {
+        console.log("⏳ Nhiệt độ kho vẫn ở mức cao, nhưng đang trong thời gian chờ (cooldown 15 phút) của Messenger.");
+        return;
+    }
+
+    // Nội dung thông báo gửi đi
+    const message = `🚨 CẢNH BÁO NHÀ KHO 🚨\nNhiệt độ vượt ngưỡng an toàn!\n🌡️ Nhiệt độ: ${temp}°C\n💧 Độ ẩm: ${hum}%\n⏰ Thời gian: ${timeStr}`;
+    
+    // Đường dẫn gọi API CallMeBot hỗ trợ Facebook Messenger
+    const url = `https://api.callmebot.com/facebook/send.php?apikey=${FB_API_KEY}&text=${encodeURIComponent(message)}`;
+
+    try {
+        const response = await fetch(url);
+        if (response.ok) {
+            console.log("💬 [MESSENGER] Đã gửi tin nhắn cảnh báo quá nhiệt thành công qua FB Messenger!");
+            lastAlertTime = Date.now(); // Cập nhật lại mốc thời gian vừa gửi
+        } else {
+            const errText = await response.text();
+            console.error("❌ [MESSENGER] Lỗi phản hồi từ dịch vụ CallMeBot:", errText);
+        }
+    } catch (error) {
+        console.error("❌ [MESSENGER] Lỗi kết nối đường truyền khi gửi tin nhắn:", error);
+    }
+}
+// ==========================================
+
 const mqttOptions = {
     host: process.env.HIVEMQ_HOST,
     port: 8883,
@@ -49,6 +90,7 @@ client.on('message', async (topic, message) => {
     try {
         const data = JSON.parse(message.toString());
         
+        // --- XỬ LÝ PHẢN HỒI OTA TỪ MẠCH ---
         if (data.status === 'OTA_SUCCESS') {
             io.emit('otaEvent', { success: true, message: '✓ Mạch đã nhận Code mới thành công và đang khởi động lại!' });
             return; 
@@ -57,19 +99,30 @@ client.on('message', async (topic, message) => {
             return;
         }
 
+        // --- XỬ LÝ DỮ LIỆU CẢM BIẾN ---
         const nowMs = Date.now();
         let timestamp;
-        if (topic === 'nhakho/recovery' && data.timestamp) {
+        let isRecovery = (topic === 'nhakho/recovery');
+
+        if (isRecovery && data.timestamp) {
             timestamp = new Date(data.timestamp * 1000).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
         } else {
             timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
         }
 
-        const suffix = (topic === 'nhakho/recovery') ? ' [Recovery]' : '';
-        
-        // Gửi toàn bộ dữ liệu (Bao gồm cả biến alarm_muted mới) sang Web
+        const suffix = isRecovery ? ' [Recovery]' : '';
         io.emit('mqttData', { ...data, time: timestamp.split(' ')[0] });
 
+        // 🚨 GỌI HÀM CẢNH BÁO FACEBOOK MESSENGER TẠI ĐÂY 🚨
+        // Lưu ý: Chỉ gửi cảnh báo khi là dữ liệu Realtime (telemetry), không gửi với dữ liệu quá khứ (recovery)
+        if (!isRecovery && data.temp != null) {
+            const currentTemp = parseFloat(data.temp);
+            if (currentTemp >= TEMP_ALARM_THRESHOLD) {
+                sendMessengerAlert(currentTemp, data.hum, timestamp);
+            }
+        }
+
+        // BỘ LỌC TRÙNG DỮ LIỆU (Google Sheets)
         if (topic === 'nhakho/telemetry') {
             if (lastReceivedData.temp === data.temp && 
                 lastReceivedData.hum === data.hum && 
@@ -91,14 +144,13 @@ client.on('message', async (topic, message) => {
     }
 });
 
-// --- API ROUTES ---
 app.use(express.static('public'));
-app.use(express.json()); // Bổ sung Middleware đọc JSON Body
+app.use(express.json()); 
 
 // 🛠️ API ĐIỀU KHIỂN CÒI TỪ XA
 app.post('/control-buzzer', (req, res) => {
     try {
-        const { command } = req.body; // Bắt giá trị 'MUTE_BUZZER' hoặc 'UNMUTE_BUZZER'
+        const { command } = req.body; 
         if (command === 'MUTE_BUZZER' || command === 'UNMUTE_BUZZER') {
             client.publish('nhakho/cmd', JSON.stringify({ cmd: command }));
             res.send('Lệnh điều khiển còi đã được gửi!');
