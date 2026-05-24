@@ -26,7 +26,7 @@ const FB_API_KEY = process.env.FB_API_KEY || "xxxxx";
 
 // 🟢 CÁC NGƯỠNG CẢNH BÁO MỚI (Đồng bộ với ESP32)
 const TEMP_MIN = 20.0;
-const TEMP_MAX = 40.0;
+const TEMP_MAX = 25.0;
 const HUM_MIN = 40.0;
 const HUM_MAX = 80.0;
 
