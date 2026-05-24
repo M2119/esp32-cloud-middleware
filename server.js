@@ -49,16 +49,14 @@ client.on('message', async (topic, message) => {
     try {
         const data = JSON.parse(message.toString());
         
-        // --- 🛠️ XỬ LÝ PHẢN HỒI OTA TỪ MẠCH ---
         if (data.status === 'OTA_SUCCESS') {
             io.emit('otaEvent', { success: true, message: '✓ Mạch đã nhận Code mới thành công và đang khởi động lại!' });
-            return; // Dừng lại, không ghi vào Google Sheets
+            return; 
         } else if (data.status === 'OTA_FAILED') {
             io.emit('otaEvent', { success: false, message: 'Nạp Code thất bại! Vui lòng thử lại.' });
             return;
         }
 
-        // --- XỬ LÝ DỮ LIỆU CẢM BIẾN ---
         const nowMs = Date.now();
         let timestamp;
         if (topic === 'nhakho/recovery' && data.timestamp) {
@@ -68,6 +66,8 @@ client.on('message', async (topic, message) => {
         }
 
         const suffix = (topic === 'nhakho/recovery') ? ' [Recovery]' : '';
+        
+        // Gửi toàn bộ dữ liệu (Bao gồm cả biến alarm_muted mới) sang Web
         io.emit('mqttData', { ...data, time: timestamp.split(' ')[0] });
 
         if (topic === 'nhakho/telemetry') {
@@ -91,7 +91,25 @@ client.on('message', async (topic, message) => {
     }
 });
 
+// --- API ROUTES ---
 app.use(express.static('public'));
+app.use(express.json()); // Bổ sung Middleware đọc JSON Body
+
+// 🛠️ API ĐIỀU KHIỂN CÒI TỪ XA
+app.post('/control-buzzer', (req, res) => {
+    try {
+        const { command } = req.body; // Bắt giá trị 'MUTE_BUZZER' hoặc 'UNMUTE_BUZZER'
+        if (command === 'MUTE_BUZZER' || command === 'UNMUTE_BUZZER') {
+            client.publish('nhakho/cmd', JSON.stringify({ cmd: command }));
+            res.send('Lệnh điều khiển còi đã được gửi!');
+        } else {
+            res.status(400).send('Lệnh còi không hợp lệ.');
+        }
+    } catch (err) {
+        console.error('Lỗi điều khiển còi:', err);
+        res.status(500).send(`Lỗi hệ thống: ${err.message}`);
+    }
+});
 
 app.post('/reset-wifi', (req, res) => {
     try {
@@ -134,10 +152,7 @@ app.post('/upload-ota', upload.single('firmware'), async (req, res) => {
 
         const rawOtaUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${targetPath}`;
         
-        // Phát lệnh OTA xuống ESP32
         client.publish('nhakho/cmd', JSON.stringify({ cmd: "UPDATE_FIRMWARE", url: rawOtaUrl }));
-
-        // Chỉ gửi phản hồi là Đã đẩy file thành công. Chờ mạch xử lý.
         res.send('Đã đẩy file lên Github và ra lệnh cho thiết bị!');
     } catch (err) {
         res.status(500).send(`Lỗi đẩy file lên GitHub: ${err.message}`);
