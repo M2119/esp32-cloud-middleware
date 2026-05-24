@@ -20,37 +20,39 @@ const serviceAccountPath = path.join(__dirname, 'service-account.json');
 const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
 
 // ==========================================
-// 🔔 CẤU HÌNH THÔNG BÁO FB MESSENGER (CallMeBot)
+// 🔔 CẤU HÌNH THÔNG BÁO FB MESSENGER (CallMeBot) VÀ CÁC NGƯỠNG AN TOÀN
 // ==========================================
 const FB_API_KEY = process.env.FB_API_KEY || "xxxxx"; 
-const TEMP_ALARM_THRESHOLD = 35.0; 
+
+// 🟢 CÁC NGƯỠNG CẢNH BÁO MỚI (Đồng bộ với ESP32)
+const TEMP_MIN = 20.0;
+const TEMP_MAX = 40.0;
+const HUM_MIN = 40.0;
+const HUM_MAX = 80.0;
+
 let lastAlertTime = 0; 
 
-async function sendMessengerAlert(temp, hum, timeStr) {
+// Hàm gửi tin nhắn với nội dung động (báo chính xác thông số bị lỗi)
+async function sendMessengerAlert(alertDetails, temp, hum, timeStr) {
     if (!FB_API_KEY || FB_API_KEY === "xxxxx") {
-        console.warn("⚠️ Chưa cấu hình FB_API_KEY trong file .env. Bỏ qua tác vụ gửi thông báo Facebook Messenger.");
+        console.warn("⚠️ Chưa cấu hình FB_API_KEY. Bỏ qua gửi Facebook Messenger.");
         return;
     }
     
-    if (Date.now() - lastAlertTime < 900000) {
-        console.log("⏳ Nhiệt độ kho vẫn ở mức cao, nhưng đang trong thời gian chờ (cooldown 15 phút) của Messenger.");
-        return;
-    }
+    // Cooldown 15 phút chống Spam
+    if (Date.now() - lastAlertTime < 900000) return;
 
-    const message = `🚨 CẢNH BÁO NHÀ KHO 🚨\nNhiệt độ vượt ngưỡng an toàn!\n🌡️ Nhiệt độ: ${temp}°C\n💧 Độ ẩm: ${hum}%\n⏰ Thời gian: ${timeStr}`;
+    const message = `🚨 CẢNH BÁO NHÀ KHO 🚨\n${alertDetails}\n🌡️ Nhiệt độ hiện tại: ${temp}°C\n💧 Độ ẩm hiện tại: ${hum}%\n⏰ Thời gian: ${timeStr}`;
     const url = `https://api.callmebot.com/facebook/send.php?apikey=${FB_API_KEY}&text=${encodeURIComponent(message)}`;
 
     try {
         const response = await fetch(url);
         if (response.ok) {
-            console.log("💬 [MESSENGER] Đã gửi tin nhắn cảnh báo quá nhiệt thành công qua FB Messenger!");
+            console.log("💬 [MESSENGER] Đã gửi tin nhắn cảnh báo thành công:\n", alertDetails);
             lastAlertTime = Date.now(); 
-        } else {
-            const errText = await response.text();
-            console.error("❌ [MESSENGER] Lỗi phản hồi từ dịch vụ CallMeBot:", errText);
         }
     } catch (error) {
-        console.error("❌ [MESSENGER] Lỗi kết nối đường truyền khi gửi tin nhắn:", error);
+        console.error("❌ [MESSENGER] Lỗi kết nối gửi tin nhắn:", error);
     }
 }
 // ==========================================
@@ -73,6 +75,18 @@ const serviceAccountAuth = new JWT({
 const doc = new GoogleSpreadsheet(SPREADSHEET_ID, serviceAccountAuth);
 
 let lastReceivedData = { temp: null, hum: null, time: 0 };
+let lastKnownState = { temp: null, hum: null, timeStr: null, alarm_muted: null };
+
+io.on('connection', (socket) => {
+    if (lastKnownState.temp !== null) {
+        socket.emit('mqttData', {
+            temp: lastKnownState.temp,
+            hum: lastKnownState.hum,
+            time: lastKnownState.timeStr,
+            alarm_muted: lastKnownState.alarm_muted
+        });
+    }
+});
 
 const client = mqtt.connect(mqttOptions);
 client.on('connect', () => {
@@ -85,24 +99,23 @@ client.on('message', async (topic, message) => {
     try {
         const data = JSON.parse(message.toString());
         
-        // 🟢 1. XỬ LÝ PHẢN HỒI NHANH (ACK) TỪ LỆNH ĐIỀU KHIỂN CÒI
+        // 1. Phản hồi nhanh từ nút bấm
         if (data.is_ack) {
-            console.log(`[ACK] Nhận phản hồi còi từ mạch ESP32: ${data.alarm_muted ? 'MUTE (Tắt)' : 'UNMUTE (Bật)'}`);
-            // Gửi thẳng trạng thái sang Giao diện Web để cập nhật nút bấm lập tức
+            lastKnownState.alarm_muted = data.alarm_muted; 
             io.emit('mqttData', { alarm_muted: data.alarm_muted });
-            return; // Thoát ngay để không bị dính vào bộ lọc Spam hay ghi lỗi vào Google Sheets
+            return; 
         }
 
-        // --- 2. XỬ LÝ PHẢN HỒI OTA TỪ MẠCH ---
+        // 2. OTA Events
         if (data.status === 'OTA_SUCCESS') {
-            io.emit('otaEvent', { success: true, message: '✓ Mạch đã nhận Code mới thành công và đang khởi động lại!' });
+            io.emit('otaEvent', { success: true, message: '✓ Mạch đã nhận Code thành công!' });
             return; 
         } else if (data.status === 'OTA_FAILED') {
-            io.emit('otaEvent', { success: false, message: 'Nạp Code thất bại! Vui lòng thử lại.' });
+            io.emit('otaEvent', { success: false, message: 'Nạp Code thất bại! Thử lại.' });
             return;
         }
 
-        // --- 3. XỬ LÝ DỮ LIỆU CẢM BIẾN ---
+        // 3. Xử lý số liệu đo đạc
         const nowMs = Date.now();
         let timestamp;
         let isRecovery = (topic === 'nhakho/recovery');
@@ -114,17 +127,36 @@ client.on('message', async (topic, message) => {
         }
 
         const suffix = isRecovery ? ' [Recovery]' : '';
-        io.emit('mqttData', { ...data, time: timestamp.split(' ')[0] });
+        let timeStr = timestamp.split(' ')[0];
+        
+        io.emit('mqttData', { ...data, time: timeStr });
 
-        // 🚨 GỌI HÀM CẢNH BÁO FACEBOOK MESSENGER
-        if (!isRecovery && data.temp != null) {
+        if (!isRecovery && data.temp != null && data.hum != null) {
+            lastKnownState = { 
+                temp: data.temp, 
+                hum: data.hum, 
+                timeStr: timeStr, 
+                alarm_muted: data.alarm_muted !== undefined ? data.alarm_muted : lastKnownState.alarm_muted 
+            };
+            
+            // 🟢 KIỂM TRA ĐIỀU KIỆN ĐỂ GỬI MESSENGER
             const currentTemp = parseFloat(data.temp);
-            if (currentTemp >= TEMP_ALARM_THRESHOLD) {
-                sendMessengerAlert(currentTemp, data.hum, timestamp);
+            const currentHum = parseFloat(data.hum);
+            let alertDetails = "";
+
+            if (currentTemp > TEMP_MAX) alertDetails += `⚠️ LỖI: NHIỆT ĐỘ QUÁ CAO (>40°C)\n`;
+            else if (currentTemp < TEMP_MIN) alertDetails += `⚠️ LỖI: NHIỆT ĐỘ QUÁ THẤP (<20°C)\n`;
+
+            if (currentHum > HUM_MAX) alertDetails += `⚠️ LỖI: ĐỘ ẨM QUÁ CAO (>80%)\n`;
+            else if (currentHum < HUM_MIN) alertDetails += `⚠️ LỖI: ĐỘ ẨM QUÁ THẤP (<40%)\n`;
+
+            // Nếu có ít nhất 1 lỗi xảy ra thì kích hoạt hàm gửi tin nhắn
+            if (alertDetails !== "") {
+                sendMessengerAlert(alertDetails, currentTemp, currentHum, timestamp);
             }
         }
 
-        // BỘ LỌC TRÙNG DỮ LIỆU (Google Sheets)
+        // Chống spam Google Sheets
         if (topic === 'nhakho/telemetry') {
             if (lastReceivedData.temp === data.temp && 
                 lastReceivedData.hum === data.hum && 
@@ -149,40 +181,36 @@ client.on('message', async (topic, message) => {
 app.use(express.static('public'));
 app.use(express.json()); 
 
-// 🛠️ API ĐIỀU KHIỂN CÒI TỪ XA
 app.post('/control-buzzer', (req, res) => {
     try {
         const { command } = req.body; 
         if (command === 'MUTE_BUZZER' || command === 'UNMUTE_BUZZER') {
             client.publish('nhakho/cmd', JSON.stringify({ cmd: command }));
-            res.send('Lệnh điều khiển còi đã được gửi!');
+            res.send('Đã gửi!');
         } else {
-            res.status(400).send('Lệnh còi không hợp lệ.');
+            res.status(400).send('Lỗi');
         }
     } catch (err) {
-        console.error('Lỗi điều khiển còi:', err);
-        res.status(500).send(`Lỗi hệ thống: ${err.message}`);
+        res.status(500).send(err.message);
     }
 });
 
 app.post('/reset-wifi', (req, res) => {
     try {
         client.publish('nhakho/cmd', JSON.stringify({ cmd: "RESET_WIFI" }));
-        res.send('Gửi lệnh yêu cầu xóa cấu hình WiFi và khởi động lại mạch thành công!');
+        res.send('Thành công!');
     } catch (err) {
-        res.status(500).send(`Không thể gửi lệnh reset: ${err.message}`);
+        res.status(500).send(err.message);
     }
 });
 
 app.post('/upload-ota', upload.single('firmware'), async (req, res) => {
     if (!req.file) return res.status(400).send('Không tìm thấy file firmware.');
-
     const token = process.env.GITHUB_TOKEN;
     const owner = process.env.GITHUB_OWNER;
     const repo = process.env.GITHUB_REPO;
     const branch = process.env.GITHUB_BRANCH || 'main';
     const targetPath = 'public/ota/firmware.bin';
-
     const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${targetPath}`;
     const fileBase64 = req.file.buffer.toString('base64');
     let fileSha = null;
@@ -192,20 +220,15 @@ app.post('/upload-ota', upload.single('firmware'), async (req, res) => {
             headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'NodeJS-OTA' }
         });
         if (getRes.ok) fileSha = (await getRes.json()).sha; 
-
         const putPayload = { message: `OTA Update ${new Date().toLocaleTimeString()}`, content: fileBase64, branch: branch };
         if (fileSha) putPayload.sha = fileSha; 
-
         const putRes = await fetch(apiUrl, {
             method: 'PUT',
             headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json', 'User-Agent': 'NodeJS-OTA' },
             body: JSON.stringify(putPayload)
         });
-
         if (!putRes.ok) throw new Error(await putRes.text());
-
         const rawOtaUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${targetPath}`;
-        
         client.publish('nhakho/cmd', JSON.stringify({ cmd: "UPDATE_FIRMWARE", url: rawOtaUrl }));
         res.send('Đã đẩy file lên Github và ra lệnh cho thiết bị!');
     } catch (err) {

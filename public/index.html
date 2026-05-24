@@ -96,7 +96,7 @@
     </div>
 
     <script>
-        // --- CẤU HÌNH BIỂU ĐỒ ---
+// --- CẤU HÌNH BIỂU ĐỒ ---
         const ctx = document.getElementById('realtimeChart').getContext('2d');
         const MAX_POINTS = 15;
         const chartData = {
@@ -120,41 +120,70 @@
         };
         const realtimeChart = new Chart(ctx, config);
 
-        // Biến lưu trạng thái còi
+        // Biến lưu trạng thái còi, nhiệt độ, độ ẩm
         let currentBuzzerMuted = null;
+        let currentTempValue = 0; 
+        let currentHumValue = 0;
 
         // --- KẾT NỐI SOCKET VÀ XỬ LÝ DỮ LIỆU ---
         const socket = io();
         socket.on('mqttData', (data) => {
-            if(data.temp) document.getElementById('currentTemp').innerText = parseFloat(data.temp).toFixed(1) + ' °C';
-            if(data.hum) document.getElementById('currentHum').innerText = parseFloat(data.hum).toFixed(1) + ' %';
             
-            if (chartData.labels.length >= MAX_POINTS) {
-                chartData.labels.shift(); chartData.datasets[0].data.shift(); chartData.datasets[1].data.shift();
+            // Vẽ biểu đồ khi có dữ liệu cảm biến
+            if (data.temp !== undefined && data.temp !== null && data.hum !== undefined) {
+                currentTempValue = parseFloat(data.temp);
+                currentHumValue = parseFloat(data.hum); 
+                
+                document.getElementById('currentTemp').innerText = currentTempValue.toFixed(1) + ' °C';
+                document.getElementById('currentHum').innerText = currentHumValue.toFixed(1) + ' %';
+                
+                if (chartData.labels.length >= MAX_POINTS) {
+                    chartData.labels.shift(); chartData.datasets[0].data.shift(); chartData.datasets[1].data.shift();
+                }
+                
+                chartData.labels.push(data.time || new Date().toLocaleTimeString('vi-VN'));
+                chartData.datasets[0].data.push(currentTempValue); 
+                chartData.datasets[1].data.push(currentHumValue);
+                realtimeChart.update();
             }
-            
-            chartData.labels.push(data.time || new Date().toLocaleTimeString('vi-VN'));
-            chartData.datasets[0].data.push(data.temp); chartData.datasets[1].data.push(data.hum);
-            realtimeChart.update();
 
-            // 🛠️ XỬ LÝ ĐỒNG BỘ TRẠNG THÁI CÒI LÊN GIAO DIỆN
+            // Ghi nhận trạng thái còi
             if (data.alarm_muted !== undefined) {
                 currentBuzzerMuted = (data.alarm_muted === 1);
+            }
+
+            // 🟢 LOGIC KHÓA NÚT CÒI ĐƯỢC NÂNG CẤP (Kiểm tra cả 2 thông số)
+            if (currentBuzzerMuted !== null) {
                 const indicator = document.getElementById('buzzerIndicator');
                 const btn = document.getElementById('buzzerBtn');
                 
-                btn.disabled = false; // Nhận được data mạch mới cho phép bấm
-                
-                if (currentBuzzerMuted) {
+                const isTempSafe = (currentTempValue >= 20.0 && currentTempValue <= 40.0);
+                const isHumSafe  = (currentHumValue >= 40.0 && currentHumValue <= 80.0);
+
+                if (isTempSafe && isHumSafe) {
+                    // NẾU CẢ 2 AN TOÀN -> KHÓA NÚT
                     indicator.className = 'buzzer-indicator off';
-                    indicator.innerText = 'ĐÃ BỊ TẮT (MUTE)';
-                    btn.innerText = 'BẬT LẠI CÒI';
-                    btn.style.backgroundColor = '#00b894'; // Đổi nút sang Xanh Lá
+                    indicator.innerText = 'TRẠNG THÁI AN TOÀN (BÌNH THƯỜNG)';
+                    btn.innerText = 'CÒI TỰ ĐỘNG KHÓA';
+                    btn.style.backgroundColor = '#b2bec3'; 
+                    btn.style.cursor = 'not-allowed';
+                    btn.disabled = true;
                 } else {
-                    indicator.className = 'buzzer-indicator on';
-                    indicator.innerText = 'ĐANG BẬT (SẴN SÀNG)';
-                    btn.innerText = 'TẮT CÒI TỪ XA';
-                    btn.style.backgroundColor = '#e17055'; // Đổi nút sang Đỏ
+                    // NẾU CÓ ÍT NHẤT 1 LỖI -> CHO PHÉP BẤM ĐIỀU KHIỂN CÒI
+                    btn.style.cursor = 'pointer';
+                    btn.disabled = false; 
+                    
+                    if (currentBuzzerMuted) {
+                        indicator.className = 'buzzer-indicator off';
+                        indicator.innerText = '⚠️ CHẾ ĐỘ IM LẶNG (ĐANG MUTE)';
+                        btn.innerText = 'MỞ LẠI CÒI BÁO ĐỘNG';
+                        btn.style.backgroundColor = '#00b894'; 
+                    } else {
+                        indicator.className = 'buzzer-indicator on';
+                        indicator.innerText = '🚨 ĐANG HÚ CÒI (THÔNG SỐ VƯỢT NGƯỠNG)';
+                        btn.innerText = 'TẮT TIẾNG CÒI TỪ XA (MUTE)';
+                        btn.style.backgroundColor = '#e17055'; 
+                    }
                 }
             }
         });
@@ -162,12 +191,9 @@
         // --- HÀM KÍCH HOẠT ĐIỀU KHIỂN CÒI TỪ XA ---
         function toggleBuzzer() {
             if (currentBuzzerMuted === null) return;
-            
-            // Đảo ngược trạng thái hiện tại để gửi lệnh
             const commandToSend = currentBuzzerMuted ? 'UNMUTE_BUZZER' : 'MUTE_BUZZER';
             const btn = document.getElementById('buzzerBtn');
             
-            // Khóa nút tạo hiệu ứng xoay chờ phản hồi
             btn.disabled = true;
             btn.innerHTML = '<span class="spinner"></span> Đang gửi lệnh...';
 
@@ -176,17 +202,13 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ command: commandToSend })
             })
-            .then(res => {
-                if (!res.ok) throw new Error('Lỗi gửi API lên Server');
-                // Lưu ý: Chúng ta không mở lại nút ở đây. Nút sẽ tự động mở lại khi bản tin MQTT tiếp theo báo về.
-            })
             .catch(err => {
                 alert('Lỗi điều khiển: ' + err.message);
                 btn.disabled = false;
             });
         }
 
-        // --- CÁC HÀM CŨ (OTA VÀ RESET WIFI) ---
+        // --- CÁC HÀM OTA VÀ RESET ---
         function triggerRemoteOTA() {
             const input = document.getElementById('firmwareInput');
             const status = document.getElementById('statusText');
@@ -207,7 +229,7 @@
                 return msg;
             })
             .then(successMsg => {
-                status.innerHTML = '<span class="spinner"></span>' + successMsg + '<br><small style="color:#636e72;">Đang chờ mạch nạp tải và nạp code. Vui lòng không tắt trang... (Mất khoảng 30s)</small>';
+                status.innerHTML = '<span class="spinner"></span>' + successMsg + '<br><small style="color:#636e72;">Đang chờ mạch tải và nạp code. Vui lòng không tắt trang... (Mất khoảng 30s)</small>';
                 input.value = '';
             })
             .catch(error => {
@@ -235,8 +257,8 @@
             const status = document.getElementById('resetStatusText');
             const btn = document.getElementById('resetWifiBtn');
 
-            if (!confirm("CẢNH BÁO: Hành động này sẽ xóa toàn bộ bộ nhớ mạng WiFi đang lưu trên ESP32!\nMạch sẽ khởi động lại và mất kết nối Cloud ngay lập tức.\n\nBạn có chắc chắn muốn thực hiện?")) return;
-            if (!confirm("XÁC NHẬN LẦN CUỐI:\nBạn sẽ phải ra tận nơi lắp mạch, kết nối vào mạng AP 'ESP32_T-H-Realtimer' để cấu hình lại WiFi cho nó.\n\nBạn vẫn muốn tiếp tục?")) return;
+            if (!confirm("CẢNH BÁO: Hành động này sẽ xóa toàn bộ bộ nhớ mạng WiFi...")) return;
+            if (!confirm("XÁC NHẬN LẦN CUỐI:\nBạn sẽ phải ra tận nơi...")) return;
 
             btn.disabled = true;
             status.style.color = '#d63031';
@@ -251,7 +273,7 @@
             .then(msg => {
                 status.style.color = '#2d3436'; status.style.fontWeight = 'bold';
                 status.innerText = '✓ Lệnh đã phát đi thành công! Thiết bị đang xóa bộ nhớ và khởi động lại...';
-                alert('Mạch đang thực hiện xóa cấu hình WiFi và Khởi động lại. Giao diện Web sẽ tạm ngưng nhận dữ liệu từ mạch này cho đến khi bạn cấu hình mạng mới.');
+                alert('Mạch đang thực hiện xóa cấu hình WiFi...');
             })
             .catch(err => {
                 status.style.color = '#d63031';
