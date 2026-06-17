@@ -28,7 +28,7 @@ const FB_API_KEY = process.env.FB_API_KEY || "xxxxx";
 const TEMP_MIN = 20.0;
 const TEMP_MAX = 40.0;
 const HUM_MIN = 40.0;
-const HUM_MAX = 80.0;
+const HUM_MAX = 100.0;
 
 let lastAlertTime = 0; 
 
